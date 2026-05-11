@@ -2,21 +2,23 @@ import os
 import json
 import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, \
+    KeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-# ========== КОНФИГ ==========
-TOKEN = "8580758584:AAFLoIN4PVFnQoC_RssMvLaWRhRtQjbep1k"
-ADMIN_ID = 8237417166  # Твой ID
+# ========== КОНФИГ (из переменных окружения Railway) ==========
+TOKEN = os.environ.get("BOT_TOKEN", "8580758584:AAFLoIN4PVFnQoC_RssMvLaWRhRtQjbep1k")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", 8237417166))
 PRODUCTS_FILE = "products.json"
 
 # ========== ИНИЦИАЛИЗАЦИЯ ==========
 bot = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
+
 
 # ========== РАБОТА С ТОВАРАМИ ==========
 def load_products():
@@ -42,15 +44,18 @@ def load_products():
     with open(PRODUCTS_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
+
 def save_products(products):
     with open(PRODUCTS_FILE, "w", encoding="utf-8") as f:
         json.dump(products, f, ensure_ascii=False, indent=2)
+
 
 # Глобальная переменная для товаров (кэш)
 products_cache = load_products()
 
 # ========== КОРЗИНА (временное хранилище для каждого пользователя) ==========
-user_carts = {}  # {user_id: [{"id": "v1", "name": "...", "price": 123, "category": "..."}, ...]}
+user_carts = {}
+
 
 # ========== FSM ДЛЯ ОФОРМЛЕНИЯ ==========
 class OrderForm(StatesGroup):
@@ -58,9 +63,9 @@ class OrderForm(StatesGroup):
     waiting_for_username = State()
     waiting_for_comment = State()
 
+
 # ========== КЛАВИАТУРЫ ==========
 def get_main_keyboard(is_admin=False):
-    """Главная клавиатура (меню)"""
     buttons = [
         [KeyboardButton(text="📂 Категории")],
         [KeyboardButton(text="🛒 Корзина"), KeyboardButton(text="✅ Оформить заказ")]
@@ -69,42 +74,44 @@ def get_main_keyboard(is_admin=False):
         buttons.append([KeyboardButton(text="🔧 Админ-панель")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
+
 def get_categories_kb():
-    """Клавиатура с категориями"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
     for category in products_cache.keys():
         keyboard.inline_keyboard.append([InlineKeyboardButton(text=category, callback_data=f"cat_{category}")])
     keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
     return keyboard
 
+
 def get_products_kb(category):
-    """Клавиатура с товарами категории"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
     for product in products_cache.get(category, []):
         keyboard.inline_keyboard.append([
-            InlineKeyboardButton(text=f"{product['name']} - {product['price']}₽", callback_data=f"product_{category}_{product['id']}")
+            InlineKeyboardButton(text=f"{product['name']} - {product['price']}₽",
+                                 callback_data=f"product_{category}_{product['id']}")
         ])
-    keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔙 Назад к категориям", callback_data="back_categories")])
+    keyboard.inline_keyboard.append(
+        [InlineKeyboardButton(text="🔙 Назад к категориям", callback_data="back_categories")])
     return keyboard
 
+
 def get_product_actions_kb(category, product_id):
-    """Кнопки для конкретного товара"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ В корзину", callback_data=f"add_{category}_{product_id}")],
         [InlineKeyboardButton(text="🔙 Назад к товарам", callback_data=f"back_products_{category}")]
     ])
     return keyboard
 
+
 def get_cart_kb():
-    """Клавиатура в корзине"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🗑 Очистить корзину", callback_data="clear_cart")],
         [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="back_main")]
     ])
     return keyboard
 
+
 def get_admin_panel_kb():
-    """Админ-панель"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Добавить товар", callback_data="admin_add")],
         [InlineKeyboardButton(text="✏️ Редактировать товар", callback_data="admin_edit")],
@@ -113,24 +120,26 @@ def get_admin_panel_kb():
     ])
     return keyboard
 
+
 def get_admin_categories_kb():
-    """Выбор категории для админ-действий"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
     for category in products_cache.keys():
         keyboard.inline_keyboard.append([InlineKeyboardButton(text=category, callback_data=f"admin_cat_{category}")])
     keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")])
     return keyboard
 
-def get_admin_products_kb(category, action):  # action = "edit" or "delete"
+
+def get_admin_products_kb(category, action):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
     for product in products_cache.get(category, []):
-        keyboard.inline_keyboard.append([InlineKeyboardButton(text=product['name'], callback_data=f"admin_{action}_{category}_{product['id']}")])
+        keyboard.inline_keyboard.append(
+            [InlineKeyboardButton(text=product['name'], callback_data=f"admin_{action}_{category}_{product['id']}")])
     keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔙 Назад к категориям", callback_data="admin_cats")])
     return keyboard
 
+
 # ========== ОТПРАВКА ЧЕКА АДМИНУ ==========
 async def send_receipt(user_id, fullname, username, comment, cart_items, total):
-    """Формирует и отправляет чек админу"""
     items_text = "\n".join([f"- {item['name']} x1 = {item['price']}₽" for item in cart_items])
     receipt = (
         f"🛒 **НОВЫЙ ЗАКАЗ**\n\n"
@@ -142,6 +151,7 @@ async def send_receipt(user_id, fullname, username, comment, cart_items, total):
         f"🆔 **ID клиента:** {user_id}"
     )
     await bot.send_message(ADMIN_ID, receipt, parse_mode="Markdown")
+
 
 # ========== ОБРАБОТЧИКИ ==========
 @dp.message(Command("start"))
@@ -156,9 +166,11 @@ async def cmd_start(message: Message):
         parse_mode="Markdown"
     )
 
+
 @dp.message(lambda message: message.text == "📂 Категории")
 async def show_categories(message: Message):
     await message.answer("Выбери категорию:", reply_markup=get_categories_kb())
+
 
 @dp.message(lambda message: message.text == "🛒 Корзина")
 async def show_cart(message: Message):
@@ -167,14 +179,15 @@ async def show_cart(message: Message):
     if not cart:
         await message.answer("🛍 Ваша корзина пуста. Добавьте товары через категории.")
         return
-    
+
     total = sum(item['price'] for item in cart)
-    items = "\n".join([f"{i+1}. {item['name']} - {item['price']}₽" for i, item in enumerate(cart)])
+    items = "\n".join([f"{i + 1}. {item['name']} - {item['price']}₽" for i, item in enumerate(cart)])
     await message.answer(
         f"🛒 **Ваша корзина:**\n{items}\n\n💰 **Сумма:** {total}₽",
         reply_markup=get_cart_kb(),
         parse_mode="Markdown"
     )
+
 
 @dp.message(lambda message: message.text == "✅ Оформить заказ")
 async def start_order(message: Message, state: FSMContext):
@@ -183,16 +196,18 @@ async def start_order(message: Message, state: FSMContext):
     if not cart:
         await message.answer("❌ Корзина пуста. Сначала добавьте товары.")
         return
-    
+
     await message.answer("📝 Для оформления заказа напишите ваше **ФИО**:")
     await state.set_state(OrderForm.waiting_for_fullname)
     await state.update_data(cart=cart)
+
 
 @dp.message(OrderForm.waiting_for_fullname)
 async def get_fullname(message: Message, state: FSMContext):
     await state.update_data(fullname=message.text)
     await message.answer("📱 Введите ваш **Telegram username** (можно @... или просто ник, или '-' если не хотите):")
     await state.set_state(OrderForm.waiting_for_username)
+
 
 @dp.message(OrderForm.waiting_for_username)
 async def get_username(message: Message, state: FSMContext):
@@ -202,6 +217,7 @@ async def get_username(message: Message, state: FSMContext):
     await state.update_data(username=username)
     await message.answer("💬 Комментарий к заказу (можно '-' если нет):")
     await state.set_state(OrderForm.waiting_for_comment)
+
 
 @dp.message(OrderForm.waiting_for_comment)
 async def get_comment(message: Message, state: FSMContext):
@@ -213,60 +229,60 @@ async def get_comment(message: Message, state: FSMContext):
     username = data['username']
     cart = data['cart']
     total = sum(item['price'] for item in cart)
-    
-    # Отправляем чек админу
+
     await send_receipt(message.from_user.id, fullname, username, comment, cart, total)
-    
-    # Очищаем корзину пользователя
     user_carts[message.from_user.id] = []
-    
+
     await message.answer(
         f"✅ **Заказ оформлен!**\n\n"
         f"Вы заказали:\n" + "\n".join([f"- {item['name']}" for item in cart]) + f"\n\n💰 Сумма: {total}₽\n\n"
-        f"Наш менеджер свяжется с вами в ближайшее время. Спасибо за покупку! 🍃",
+                                                                                f"Наш менеджер свяжется с вами в ближайшее время. Спасибо за покупку! 🍃",
         parse_mode="Markdown"
     )
     await state.clear()
+
 
 @dp.callback_query()
 async def handle_callback(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     is_admin = (user_id == ADMIN_ID)
     data = callback.data
-    
-    # Навигация
+
     if data == "back_main":
         await callback.message.edit_text("🍃 Главное меню:", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[]))
         await callback.message.answer("Возврат в главное меню.", reply_markup=get_main_keyboard(is_admin))
         await callback.answer()
         return
-    
+
     if data == "back_categories":
         await callback.message.edit_text("Выберите категорию:", reply_markup=get_categories_kb())
         await callback.answer()
         return
-    
+
     if data.startswith("cat_"):
         category = data[4:]
-        await callback.message.edit_text(f"📦 Товары в категории **{category}**:", reply_markup=get_products_kb(category), parse_mode="Markdown")
+        await callback.message.edit_text(f"📦 Товары в категории **{category}**:",
+                                         reply_markup=get_products_kb(category), parse_mode="Markdown")
         await callback.answer()
         return
-    
+
     if data.startswith("back_products_"):
         category = data[14:]
-        await callback.message.edit_text(f"📦 Товары в категории **{category}**:", reply_markup=get_products_kb(category), parse_mode="Markdown")
+        await callback.message.edit_text(f"📦 Товары в категории **{category}**:",
+                                         reply_markup=get_products_kb(category), parse_mode="Markdown")
         await callback.answer()
         return
-    
+
     if data.startswith("product_"):
         _, category, product_id = data.split("_", 2)
         product = next((p for p in products_cache.get(category, []) if p['id'] == product_id), None)
         if product:
             text = f"🍃 **{product['name']}**\n💵 Цена: {product['price']}₽\n📝 {product['desc']}"
-            await callback.message.edit_text(text, reply_markup=get_product_actions_kb(category, product_id), parse_mode="Markdown")
+            await callback.message.edit_text(text, reply_markup=get_product_actions_kb(category, product_id),
+                                             parse_mode="Markdown")
         await callback.answer()
         return
-    
+
     if data.startswith("add_"):
         _, category, product_id = data.split("_", 2)
         product = next((p for p in products_cache.get(category, []) if p['id'] == product_id), None)
@@ -283,82 +299,94 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
         else:
             await callback.answer("❌ Товар не найден", show_alert=True)
         return
-    
+
     if data == "clear_cart":
         user_carts[user_id] = []
         await callback.message.edit_text("🛒 Корзина очищена.", reply_markup=get_cart_kb())
         await callback.answer()
         return
-    
+
     # ========== АДМИНКА ==========
     if not is_admin:
         await callback.answer("⛔ У вас нет прав администратора.", show_alert=True)
         return
-    
-    if data == "🔧 Админ-панель" or data == "admin_panel":
+
+    if data == "admin_panel":
         await callback.message.edit_text("🔧 Админ-панель:", reply_markup=get_admin_panel_kb())
         await callback.answer()
         return
-    
+
     if data == "admin_back":
         await callback.message.edit_text("🔧 Админ-панель:", reply_markup=get_admin_panel_kb())
         await callback.answer()
         return
-    
+
     if data == "admin_cats":
         await callback.message.edit_text("Выберите категорию:", reply_markup=get_admin_categories_kb())
         await callback.answer()
         return
-    
+
     if data.startswith("admin_cat_"):
         category = data[10:]
         await state.update_data(admin_category=category)
-        await callback.message.edit_text(f"Категория **{category}**. Что делаем?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Добавить", callback_data="admin_add_in_cat")],
-            [InlineKeyboardButton(text="✏️ Редактировать", callback_data="admin_edit_in_cat")],
-            [InlineKeyboardButton(text="❌ Удалить", callback_data="admin_delete_in_cat")],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_cats")]
-        ]))
+        await callback.message.edit_text(f"Категория **{category}**. Что делаем?",
+                                         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                                             [InlineKeyboardButton(text="➕ Добавить",
+                                                                   callback_data="admin_add_in_cat")],
+                                             [InlineKeyboardButton(text="✏️ Редактировать",
+                                                                   callback_data="admin_edit_in_cat")],
+                                             [InlineKeyboardButton(text="❌ Удалить",
+                                                                   callback_data="admin_delete_in_cat")],
+                                             [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_cats")]
+                                         ]))
         await callback.answer()
         return
-    
+
     if data == "admin_add":
-        await callback.message.answer("Введите команду:\n`/add_category Название` - создать новую категорию\n`/add_product Категория | Название | Цена | Описание`\n\nПример:\n`/add_product Электронки | HQD New | 500 | 1500 затяжек`", parse_mode="Markdown")
+        await callback.message.answer(
+            "Введите команду:\n`/add_category Название` - создать новую категорию\n`/add_product Категория | Название | Цена | Описание`\n\nПример:\n`/add_product Электронки | HQD New | 500 | 1500 затяжек`",
+            parse_mode="Markdown")
         await callback.answer()
         return
-    
+
     if data == "admin_edit":
-        await callback.message.edit_text("Выберите категорию для редактирования:", reply_markup=get_admin_categories_kb())
+        await callback.message.edit_text("Выберите категорию для редактирования:",
+                                         reply_markup=get_admin_categories_kb())
         await callback.answer()
         return
-    
+
     if data == "admin_delete":
-        await callback.message.edit_text("Выберите категорию для удаления товара:", reply_markup=get_admin_categories_kb())
+        await callback.message.edit_text("Выберите категорию для удаления товара:",
+                                         reply_markup=get_admin_categories_kb())
         await callback.answer()
         return
-    
+
     if data == "admin_add_in_cat":
         data_state = await state.get_data()
         category = data_state.get('admin_category')
-        await callback.message.answer(f"Добавление в категорию **{category}**.\nВведите данные в формате:\n`Название | Цена | Описание`\nПример:\n`Новая жидкость | 400 | 30мл, фрукты`", parse_mode="Markdown")
+        await callback.message.answer(
+            f"Добавление в категорию **{category}**.\nВведите данные в формате:\n`Название | Цена | Описание`\nПример:\n`Новая жидкость | 400 | 30мл, фрукты`",
+            parse_mode="Markdown")
         await state.set_state("waiting_add_product")
         await callback.answer()
         return
-    
-    if data.startswith("admin_edit_in_cat"):
+
+    if data == "admin_edit_in_cat":
         data_state = await state.get_data()
         category = data_state.get('admin_category')
-        await callback.message.edit_text(f"Выберите товар для редактирования в **{category}**", reply_markup=get_admin_products_kb(category, "edit"))
+        await callback.message.edit_text(f"Выберите товар для редактирования в **{category}**",
+                                         reply_markup=get_admin_products_kb(category, "edit"))
         await callback.answer()
         return
-    
-    if data.startswith("admin_delete_in_cat"):
+
+    if data == "admin_delete_in_cat":
         data_state = await state.get_data()
         category = data_state.get('admin_category')
-        await callback.message.edit_text(f"Выберите товар для удаления в **{category}**", reply_markup=get_admin_products_kb(category, "delete"))
+        await callback.message.edit_text(f"Выберите товар для удаления в **{category}**",
+                                         reply_markup=get_admin_products_kb(category, "delete"))
         await callback.answer()
         return
-    
+
     if data.startswith("admin_edit_"):
         parts = data.split("_", 3)
         category = parts[2]
@@ -368,12 +396,11 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
         await state.set_state("waiting_edit_product")
         await callback.answer()
         return
-    
+
     if data.startswith("admin_delete_"):
         parts = data.split("_", 3)
         category = parts[2]
         product_id = parts[3]
-        # Удаляем товар
         products_cache[category] = [p for p in products_cache.get(category, []) if p['id'] != product_id]
         if not products_cache[category]:
             del products_cache[category]
@@ -382,7 +409,8 @@ async def handle_callback(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-# ========== КОМАНДЫ АДМИНА (добавление) ==========
+
+# ========== КОМАНДЫ АДМИНА ==========
 @dp.message(Command("add_category"))
 async def add_category(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -399,8 +427,9 @@ async def add_category(message: Message):
     save_products(products_cache)
     await message.answer(f"✅ Категория **{new_cat}** создана!")
 
+
 @dp.message(Command("add_product"))
-async def add_product(message: Message, state: FSMContext):
+async def add_product(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
     args = message.text.split(maxsplit=1)
@@ -419,10 +448,10 @@ async def add_product(message: Message, state: FSMContext):
         await message.answer("❌ Цена должна быть числом")
         return
     desc = parts[3].strip()
-    
+
     if category not in products_cache:
         products_cache[category] = []
-    new_id = f"{category[:2]}{len(products_cache[category])+1}"
+    new_id = f"{category[:2]}{len(products_cache[category]) + 1}"
     products_cache[category].append({
         "id": new_id,
         "name": name,
@@ -431,6 +460,7 @@ async def add_product(message: Message, state: FSMContext):
     })
     save_products(products_cache)
     await message.answer(f"✅ Товар **{name}** добавлен в категорию **{category}**")
+
 
 @dp.message(state="waiting_add_product")
 async def process_add_product(message: Message, state: FSMContext):
@@ -442,7 +472,7 @@ async def process_add_product(message: Message, state: FSMContext):
         await message.answer("❌ Ошибка, начните заново через админ-панель")
         await state.clear()
         return
-    
+
     parts = message.text.split("|")
     if len(parts) < 3:
         await message.answer("❌ Формат: `Название | Цена | Описание`")
@@ -454,8 +484,8 @@ async def process_add_product(message: Message, state: FSMContext):
         await message.answer("❌ Цена должна быть числом")
         return
     desc = parts[2].strip()
-    
-    new_id = f"{category[:2]}{len(products_cache.get(category, []))+1}"
+
+    new_id = f"{category[:2]}{len(products_cache.get(category, [])) + 1}"
     if category not in products_cache:
         products_cache[category] = []
     products_cache[category].append({
@@ -468,6 +498,7 @@ async def process_add_product(message: Message, state: FSMContext):
     await message.answer(f"✅ Товар **{name}** добавлен в **{category}**")
     await state.clear()
 
+
 @dp.message(state="waiting_edit_product")
 async def process_edit_product(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
@@ -479,7 +510,7 @@ async def process_edit_product(message: Message, state: FSMContext):
         await message.answer("❌ Ошибка, начните заново")
         await state.clear()
         return
-    
+
     parts = message.text.split("|")
     if len(parts) < 3:
         await message.answer("❌ Формат: `Название | Цена | Описание`")
@@ -491,8 +522,7 @@ async def process_edit_product(message: Message, state: FSMContext):
         await message.answer("❌ Цена должна быть числом")
         return
     desc = parts[2].strip()
-    
-    # Находим и обновляем товар
+
     for idx, p in enumerate(products_cache.get(category, [])):
         if p['id'] == product_id:
             products_cache[category][idx] = {
@@ -506,10 +536,14 @@ async def process_edit_product(message: Message, state: FSMContext):
     await message.answer(f"✅ Товар **{name}** обновлен в **{category}**")
     await state.clear()
 
-# ========== ЗАПУСК ==========
+
+# ========== ЗАПУСК ДЛЯ RAILWAY ==========
 async def main():
-    print("🍃 Бот GuberVape запущен!")
+    # Удаляем старый вебхук (важно для Railway)
+    await bot.delete_webhook(drop_pending_updates=True)
+    print("🍃 Бот GuberVape запущен на Railway!")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
